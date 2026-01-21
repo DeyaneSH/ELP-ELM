@@ -1,0 +1,12 @@
+# Dépendances et artefacts de build Elm (TRÈS IMPORTANT)
+elm-stuff/
+
+# Si vous utilisez npm/yarn pour des outils de build
+node_modules/
+
+# Dossiers de distribution/compilation (si vous compilez vers HTML/JS)
+dist/
+build/
+
+# Fichiers système
+.DS_Store
