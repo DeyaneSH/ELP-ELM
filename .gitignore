@@ -8,5 +8,7 @@ node_modules/
 dist/
 build/
 
+src/Test.elm
+
 # Fichiers système
 .DS_Store

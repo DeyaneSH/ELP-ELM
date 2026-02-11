@@ -1,3 +1,4 @@
+module HTTP_Error exposing (..)
 import Http
 
 
