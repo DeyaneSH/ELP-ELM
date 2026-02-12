@@ -7,14 +7,14 @@ module Main exposing (..)
 
 import Browser
 import Html exposing (..)
-import Html.Attributes exposing (style, id, type_, value, for)
+import Html.Attributes exposing (style, checked, id, type_, value, for)
 import Html.Events exposing (..)
 import Http
 import Json.Decode as Decode exposing (Decoder, map2, map4, field, int, string)
 import Random
 import HTTP_Error exposing (errorToString)  
 import Array exposing (Array)
-
+import Time
 
 
 -- MAIN
@@ -36,6 +36,7 @@ type Status
     = Loading           -- Recherche d'un mot...
     | Playing           -- Le joueur devine
     | Won               -- Victoire
+    | Lost              -- Défaite (temps écoulé)
     | ErrorString String -- Problème technique
 
 type alias Model =
@@ -44,6 +45,9 @@ type alias Model =
     , definitions : List String
     , userGuess : String
     , status : Status
+    , timeLeft : Int
+    , isAnswerRevealed : Bool
+    , isExpertMode : Bool
     }
 
 
@@ -53,6 +57,9 @@ type Msg
     | GotDef (Result Http.Error (List String))
     | UpdateGuess String
     | CheckGuess
+    | Tick Time.Posix
+    | ExpertMode Bool
+    | RevealAnswer Bool
 
 
 init : () -> (Model, Cmd Msg)
@@ -67,6 +74,9 @@ init _ =
           , definitions = []
           , userGuess = ""
           , status = Loading
+          , timeLeft = 30
+          , isAnswerRevealed = False
+          , isExpertMode = False
           }
         , Random.generate GotRandomWord (wordGenerator wordsArray))
 
@@ -80,7 +90,7 @@ update : Msg -> Model -> (Model, Cmd Msg)
 update msg model =
   case msg of
       GenerateNewWord ->
-          ( { model | status = Loading, userGuess = "", definitions = [] }
+          ( { model | status = Loading, userGuess = "", definitions = [],  isAnswerRevealed = False, timeLeft = 30 }
                   , Random.generate GotRandomWord (wordGenerator model.allWords))
 
       GotRandomWord word ->
@@ -107,6 +117,20 @@ update msg model =
               ( { model | status = Won }, Cmd.none )
           else
               ( model, Cmd.none )
+      Tick _ ->
+            if model.status == Playing && model.isExpertMode then
+                if model.timeLeft > 0 then
+                    ( { model | timeLeft = model.timeLeft - 1 }, Cmd.none )
+                else
+                    ( { model | status = Lost }, Cmd.none )
+            else
+                ( model, Cmd.none )
+
+      ExpertMode isChecked ->
+            ( { model | isExpertMode = isChecked, timeLeft = 30 }, Cmd.none )
+
+      RevealAnswer reveal ->
+              ( { model | isAnswerRevealed = reveal }, Cmd.none )
 
 
 -- SUBSCRIPTIONS
@@ -114,7 +138,10 @@ update msg model =
 
 subscriptions : Model -> Sub Msg
 subscriptions model =
-  Sub.none
+  if model.status == Playing && model.isExpertMode then
+        Time.every 1000 Tick
+    else
+        Sub.none
 
 
 
@@ -123,8 +150,8 @@ subscriptions model =
 
 view : Model -> Html Msg
 view model =
-  div [ style "font-family" "sans-serif", style "max-width" "600px", style "margin" "40px auto", style "padding" "20px" ]
-      [ h1 [ style "text-align" "center" ] [ text "GuessIt" ]
+  div [ style "font-family" "serif", style "max-width" "600px", style "margin" "40px auto", style "padding" "20px", style "font-size" "20px" ]
+      [ h1 [ style "text-align" "center" ] [ text "GuessIt!" ]
     , h2 [] [ text "Random Definition"]
     , viewContent model
     ]
@@ -133,57 +160,120 @@ view model =
 
 viewContent : Model -> Html Msg
 viewContent model =
-  case model.status of
+  div []
+        [ -- 1. On affiche toujours la barre de contrôle en haut
+          viewChecked model
+
+        -- 2. On affiche le contenu selon l'état du jeu
+  
+        ,  case model.status of
+            
+            
+              Loading -> -- Affiche un message de chargement pendant que les définitions sont récupérées
+                div [ style "text-align" "center", style "color" "#888" ] 
+                          [ text "Chargement d'un mot..." ]
+            
+              ErrorString errorMessage ->
+                div [ style "color" "red" ]
+                  [ p [ style "color" "red" ] [ text ("Error: " ++ errorMessage ++ " ") ] -- Affiche le message d'erreur
+                  , text "I could not load a random definition for some reason. "
+                  , button [ onClick GenerateNewWord ] [ text "Try Again!" ]
+                  ]
+            
 
 
-    Loading -> -- Affiche un message de chargement pendant que les définitions sont récupérées
-      div [ style "text-align" "center", style "color" "#888" ] 
-                [ text "Chargement d'un mot..." ]
+              Playing ->
+                div []
+                  [ viewGameInfo model -- Affiche le timer et la réponse secrète (si cochée)
 
+                  , p [] [ text "Guess the word based on its definitions:" ] -- Affiche les définitions (si elles existent), fonctionnement normal 
+                  , ul [] (List.map (\def -> li [style "margin-bottom" "5px"] [ text def ]) model.definitions) -- lambda fonction pour afficher chaque définition dans une liste
+                  , viewInputArea model -- Affiche la zone de saisie pour deviner le mot
+                  ]
+            
+              Won ->
+                div [ style "text-align" "center", style "color" "green" ] -- Ajout de styles pour la victoire
+                  [ h2 [] [ text "Congratulations! You guessed the word!" ]
+                  , p [] [ text ("The word was: " ++ model.currentWord) ]
+                  , button 
+                      [ onClick GenerateNewWord
+                      , style "margin-top" "20px", style "padding" "10px 20px", style "font-size" "1.2em", style "cursor" "pointer"
+                      ] 
+                      [ text "Play Again!" ]
+                  ]
 
-    Playing ->
-      div []
-        [ p [] [ text "Guess the word based on its definitions:" ] -- Affiche les définitions (si elles existent), fonctionnement normal 
-        , ul [] (List.map (\def -> li [style "margin-bottom" "5px"] [ text def ]) model.definitions) -- lambda fonction pour afficher chaque définition dans une liste
-        , div [ style "margin-top" "20px", style "background" "#f9f9f9", style "padding" "15px", style "border-radius" "5px" ]
-                    [ label [ for "guess-input", style "margin-right" "10px" ] [ text "Your guess:" ]
-                    , input 
-                        [ id "guess-input"
-                        , type_ "text"
-                        , value model.userGuess
-                        , onInput UpdateGuess
-                        , style "padding" "5px"
-                        ] []
-                    , button 
-                        [ onClick CheckGuess
-                        , style "margin-left" "10px", style "padding" "5px 10px", style "cursor" "pointer"
-                        ] [ text "Check" ]
+              Lost ->
+                div [ style "text-align" "center", style "color" "#d32f2f", style "margin-top" "30px" ]
+                    [ h2 [] [ text "Temps écoulé ! ⌛" ]
+                    , h3 [] [ text ("Le mot était : " ++ model.currentWord) ]
+                    , button [ onClick GenerateNewWord, style "padding" "10px 20px", style "font-size" "1em", style "cursor" "pointer" ] [ text "Réessayer" ]
                     ]
+            
         ]
-
-    Won ->
-      div [ style "text-align" "center", style "color" "green" ] -- Ajout de styles pour la victoire
-        [ h2 [] [ text "Congratulations! You guessed the word!" ]
-        , p [] [ text ("The word was: " ++ model.currentWord) ]
-        , button 
-            [ onClick GenerateNewWord
-            , style "margin-top" "20px", style "padding" "10px 20px", style "font-size" "1.2em", style "cursor" "pointer"
-            ] 
-            [ text "Play Again!" ]
-        ]
-
-    ErrorString errorMessage ->
-      div [ style "color" "red" ]
-        [ p [ style "color" "red" ] [ text ("Error: " ++ errorMessage ++ " ") ] -- Affiche le message d'erreur
-        , text "I could not load a random definition for some reason. "
-        , button [ onClick GenerateNewWord ] [ text "Try Again!" ]
-        ]
-
 
 
 
 -- Functions 
 
+viewChecked : Model -> Html Msg
+viewChecked model =
+    div [ style "display" "flex", style "justify-content" "center", style "gap" "20px", style "margin-bottom" "20px", style "background-color" "#eee", style "padding" "10px", style "border-radius" "5px" ]
+        [ -- Case Expert
+          label [ style "cursor" "pointer", style "font-weight" "bold" ]
+            [ input 
+                [ type_ "checkbox"
+                , checked model.isExpertMode
+                , onCheck ExpertMode
+                , style "margin-right" "5px" 
+                ] []
+            , text "Mode Expert (Timer)"
+            ]
+          -- Case Voir Réponse
+        , label [ style "cursor" "pointer", style "font-weight" "bold", style "color" "#007BFF" ]
+            [ input 
+                [ type_ "checkbox"
+                , checked model.isAnswerRevealed
+                , onCheck RevealAnswer
+                , style "margin-right" "5px" 
+                ] []
+            , text "Voir la réponse"
+            ]
+        ]
+
+viewGameInfo : Model -> Html Msg
+viewGameInfo model =
+    div []
+        [ -- 1. Le Timer (seulement si Expert)
+          if model.isExpertMode then
+              div [ style "font-size" "1.2em", style "font-weight" "bold", style "color" "#d32f2f", style "text-align" "center", style "margin-bottom" "10px" ]
+                  [ text ("⏰ " ++ String.fromInt model.timeLeft ++ "s") ]
+          else
+              text ""
+        
+        -- 2. La Réponse secrète (seulement si cochée)
+        , if model.isAnswerRevealed then
+              div [ style "text-align" "center", style "background-color" "#e7f3fe", style "color" "#31708f", style "padding" "10px", style "margin-bottom" "15px", style "border" "1px solid #bce8f1", style "border-radius" "4px" ]
+                  [ text ("💡 La réponse est : " ++ model.currentWord) ]
+          else
+              text ""
+        ]
+viewInputArea : Model -> Html Msg
+viewInputArea model =
+    div [ style "margin-top" "20px", style "background" "#f9f9f9", style "padding" "15px", style "border-radius" "5px" ]
+        [ label [ for "guess-input", style "margin-right" "10px" ] [ text "Your guess:" ]
+        , input 
+            [ id "guess-input"
+            , type_ "text"
+            , value model.userGuess
+            , onInput UpdateGuess
+            , style "padding" "5px"
+            , style "font-size" "1em"
+            ] []
+        , button 
+            [ onClick CheckGuess
+            , style "margin-left" "10px", style "padding" "5px 10px", style "cursor" "pointer", style "font-size" "1em"
+            ] [ text "Check" ]
+        ]
 
 -- Cette fonction prépare le tirage au sort directement sur les mots
 wordGenerator : Array String -> Random.Generator String
